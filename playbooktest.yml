@@ -136,12 +136,19 @@
                   node-role.kubernetes.io/master: ""
       when: inventory_hostname == groups['masters'][0]
 
-    - name: Edit kubeconfig file to use kube-vip VIP address
+    - name: Update kubeconfig file with kube-vip VIP address
       lineinfile:
         path: /etc/rancher/k3s/k3s.yaml
-        regexp: '(server: )(.*)'
-        line: '\1https://{{ vip }}:6443'
+        regexp: '(server: ).*'
+        line: 'server: https://{{ vip }}:6443'
+      notify: Restart K3s
       when: inventory_hostname == groups['masters'][0]
+
+  handlers:
+    - name: Restart K3s
+      systemd:
+        name: k3s
+        state: restarted
 
     - name: Setup Keepalived
       template:
