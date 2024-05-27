@@ -134,6 +134,7 @@
                   effect: NoSchedule
                 nodeSelector:
                   node-role.kubernetes.io/master: ""
+      when: inventory_hostname == groups['masters'][0]
 
     - name: Wait for Kube-VIP pods to be ready
       shell: "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl wait --for=condition=ready pod -l app=kube-vip -n kube-system --timeout=120s"
@@ -141,6 +142,13 @@
       until: result.rc == 0
       retries: 5
       delay: 10
+
+    - name: Edit kubeconfig file to use kube-vip VIP address
+      lineinfile:
+        path: /etc/rancher/k3s/k3s.yaml
+        regexp: '(server: )(.*)'
+        line: '\1https://{{ vip }}:6443'
+      when: inventory_hostname == groups['masters'][0]
 
     - name: Setup Keepalived
       template:
