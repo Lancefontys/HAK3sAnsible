@@ -1,0 +1,40 @@
+    - name: Apply MetalLB manifest from URL
+      shell: "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.5/config/manifests/metallb-native.yaml"
+      register: result
+      until: result.rc == 0
+      retries: 5
+      delay: 10
+
+    - name: Create MetalLB ConfigMap
+      shell: |
+        cat <<EOF | KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          namespace: metallb-system
+          name: config
+        data:
+          config: |
+            address-pools:
+            - name: default
+              protocol: layer2
+              addresses:
+              - {{ metallb_address_range[0] }}
+              - {{ metallb_address_range[1] }}
+        EOF
+      register: result
+      until: result.rc == 0
+      retries: 5
+      delay: 10
+
+- name: Join worker nodes to the K3s cluster
+  hosts: workers
+  become: yes
+  vars:
+    k3s_version: "v1.22.7+k3s1"
+    k3s_token: "alphasapphireandomegaruby"
+    vip: "192.168.1.20"  # The VIP used by Kube-VIP
+  tasks:
+    - name: Install K3s on worker nodes
+      shell: |
+        curl -sfL https://get.k3s.io | K3S_URL=https://{{ vip }}:6443 K3S_TOKEN={{ k3s_token }} INSTALL_K3S_VERSION={{ k3s_version }} sh -
