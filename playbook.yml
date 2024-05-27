@@ -49,10 +49,98 @@
         curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --cluster-init --tls-san {{ vip }}
       when: inventory_hostname == groups['masters'][0]
 
-    - name: Install K3s on additional master nodes
-      shell: |
-        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --server https://{{ vip }}:6443 --tls-san {{ vip }}
-      when: inventory_hostname != groups['masters'][0]
+   - name: Ensure /var/lib/rancher/k3s/server/manifests directory exists
+      file:
+        path: /var/lib/rancher/k3s/server/manifests
+        state: directory
+        mode: '0755'
+
+    - name: Download Kube-VIP RBAC manifest
+      get_url:
+        url: https://kube-vip.io/manifests/rbac.yaml
+        dest: /var/lib/rancher/k3s/server/manifests/kube-vip-rbac.yaml
+
+    - name: Create Kube-VIP DaemonSet manifest
+      copy:
+        dest: /var/lib/rancher/k3s/server/manifests/kube-vip.yaml
+        content: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: kube-vip
+            namespace: kube-system
+            labels:
+              app: kube-vip
+          data:
+            vip.yaml: |
+              apiVersion: kube-vip.io/v1
+              kind: Config
+              metadata:
+                name: kubevip
+              spec:
+                interface: {{ vip_interface }}
+                vip: {{ vip }}
+                leaderElection:
+                  namespace: kube-system
+                services:
+                - name: kube-vip
+                  type: LoadBalancer
+                  ports:
+                    - port: 6443
+                      targetPort: 6443
+                      protocol: TCP
+          ---
+          apiVersion: apps/v1
+          kind: DaemonSet
+          metadata:
+            name: kube-vip
+            namespace: kube-system
+            labels:
+              app: kube-vip
+          spec:
+            selector:
+              matchLabels:
+                app: kube-vip
+            template:
+              metadata:
+                labels:
+                  app: kube-vip
+              spec:
+                containers:
+                - name: kube-vip
+                  image: plndr/kube-vip:{{ kube_vip_version }}
+                  args:
+                  - manager
+                  env:
+                  - name: vip_arp
+                    value: "true"
+                  - name: vip_leaderelection
+                    value: "true"
+                  - name: vip_interface
+                    value: "{{ vip_interface }}"
+                  - name: vip_cidr
+                    value: "32"
+                  - name: address
+                    value: "{{ vip }}"
+                  securityContext:
+                    capabilities:
+                      add:
+                      - NET_ADMIN
+                      - SYS_TIME
+                hostNetwork: true
+                tolerations:
+                - key: node-role.kubernetes.io/master
+                  operator: Exists
+                  effect: NoSchedule
+                nodeSelector:
+                  node-role.kubernetes.io/master: ""
+
+    - name: Wait for Kube-VIP pods to be ready
+      shell: "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl wait --for=condition=ready pod -l app=kube-vip -n kube-system --timeout=120s"
+      register: result
+      until: result.rc == 0
+      retries: 5
+      delay: 10
 
     - name: Setup Keepalived
       template:
@@ -74,48 +162,8 @@
         name: haproxy
         state: restarted
 
-    - name: Clone Kube-VIP repository
-      git:
-        repo: 'https://github.com/kube-vip/kube-vip.git'
-        dest: /tmp/kube-vip
-        version: "v{{ kube_vip_version }}"
-        force: yes
-
-    - name: Build Kube-VIP binary
+    - name: Install K3s on additional master nodes
       shell: |
-        cd /tmp/kube-vip
-        go build -o /tmp/kube-vip
-
-    - name: List contents of /tmp/ directory
-      command: ls -l /tmp/
-      register: tmp_contents
-
-    - name: Debug /tmp/ directory contents
-      debug:
-        var: tmp_contents.stdout_lines
-
-    - name: Move kube-vip binary to /usr/local/bin
-      copy:
-        src: "/tmp/kube-vip/kube-vip"
-        dest: /usr/local/bin/kube-vip
-        mode: '0755'
-        remote_src: yes
-
-    - name: Generate Kube-VIP manifest
-      shell: |
-        /usr/local/bin/kube-vip manifest daemonset --interface {{ vip_interface }} --vip {{ vip }} --arp --leaderElection --controlplane --services --address {{ inventory_hostname }} > /etc/kube-vip.yaml
-      run_once: true
-
-    - name: Create Kube-VIP manifest directory
-      file:
-        path: /var/lib/rancher/k3s/server/manifests
-        state: directory
-      when: "'masters' in group_names"
-
-    - name: Move Kube-VIP manifest to manifests directory
-      copy:
-        src: /etc/kube-vip.yaml
-        dest: /var/lib/rancher/k3s/server/manifests/kube-vip.yaml
-        remote_src: yes
-
-
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --server https://{{ vip }}:6443 --tls-san {{ vip }}
+      when: inventory_hostname != groups['masters'][0]
+      
