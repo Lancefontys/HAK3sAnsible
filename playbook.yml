@@ -1,0 +1,160 @@
+- name: Create a highly available K3s cluster with Kube-VIP, Keepalived, and HAProxy
+  hosts: masters
+  become: yes
+  vars:
+    k3s_version: "v1.22.7+k3s1"
+    kube_vip_version: "0.8.0"
+    vip: "192.168.1.20"
+    vip_interface: "eth0"
+    haproxy_ip: "192.168.1.30"  # IP address of HAProxy node
+    metallb_address_range:
+      - "192.168.1.100-192.168.1.120"
+    k3s_token: "alphasapphireandomegaruby"
+    go_version: "1.21.0"
+
+  tasks:
+    - name: Ensure required packages are installed
+      package:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - curl
+        - tar
+        - make
+        - gcc
+        - golang
+        - keepalived
+        - haproxy
+
+    - name: Install specific Go version
+      shell: |
+        curl -OL https://golang.org/dl/go{{ go_version }}.linux-amd64.tar.gz
+        tar -C /usr/local -xzf go{{ go_version }}.linux-amd64.tar.gz
+        ln -sf /usr/local/go/bin/go /usr/local/bin/go
+      args:
+        creates: /usr/local/go
+
+    - name: Ensure Go is in the PATH
+      shell: |
+        echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+        . /etc/profile
+      args:
+        executable: /bin/bash
+
+    - name: Verify Go installation
+      command: go version
+
+    - name: Install K3s on first master node
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --cluster-init --tls-san {{ vip }}
+      when: inventory_hostname == groups['masters'][0]
+
+    - name: Install K3s on additional master nodes
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --server https://{{ vip }}:6443 --tls-san {{ vip }}
+      when: inventory_hostname != groups['masters'][0]
+
+    - name: Setup Keepalived
+      template:
+        src: keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+
+    - name: Restart Keepalived
+      systemd:
+        name: keepalived
+        state: restarted
+
+    - name: Setup HAProxy
+      template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+
+    - name: Restart HAProxy
+      systemd:
+        name: haproxy
+        state: restarted
+
+    - name: Clone Kube-VIP repository
+      git:
+        repo: 'https://github.com/kube-vip/kube-vip.git'
+        dest: /tmp/kube-vip
+        version: "v{{ kube_vip_version }}"
+        force: yes
+
+    - name: Build Kube-VIP binary
+      shell: |
+        cd /tmp/kube-vip
+        go build -o /tmp/kube-vip
+
+    - name: List contents of /tmp/ directory
+      command: ls -l /tmp/
+      register: tmp_contents
+
+    - name: Debug /tmp/ directory contents
+      debug:
+        var: tmp_contents.stdout_lines
+
+    - name: Move kube-vip binary to /usr/local/bin
+      copy:
+        src: "/tmp/kube-vip/kube-vip"
+        dest: /usr/local/bin/kube-vip
+        mode: '0755'
+        remote_src: yes
+
+    - name: Generate Kube-VIP manifest
+      shell: |
+        /usr/local/bin/kube-vip manifest daemonset --interface {{ vip_interface }} --vip {{ vip }} --arp --leaderElection --controlplane --services --address {{ inventory_hostname }} > /etc/kube-vip.yaml
+      run_once: true
+
+    - name: Create Kube-VIP manifest directory
+      file:
+        path: /var/lib/rancher/k3s/server/manifests
+        state: directory
+      when: "'masters' in group_names"
+
+    - name: Move Kube-VIP manifest to manifests directory
+      copy:
+        src: /etc/kube-vip.yaml
+        dest: /var/lib/rancher/k3s/server/manifests/kube-vip.yaml
+        remote_src: yes
+
+    - name: Apply MetalLB manifest from URL
+      shell: "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.5/config/manifests/metallb-native.yaml"
+      register: result
+      until: result.rc == 0
+      retries: 5
+      delay: 10
+
+    - name: Create MetalLB ConfigMap
+      shell: |
+        cat <<EOF | KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl apply -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          namespace: metallb-system
+          name: config
+        data:
+          config: |
+            address-pools:
+            - name: default
+              protocol: layer2
+              addresses:
+              - {{ metallb_address_range[0] }}
+              - {{ metallb_address_range[1] }}
+        EOF
+      register: result
+      until: result.rc == 0
+      retries: 5
+      delay: 10
+
+- name: Join worker nodes to the K3s cluster
+  hosts: workers
+  become: yes
+  vars:
+    k3s_version: "v1.22.7+k3s1"
+    k3s_token: "alphasapphireandomegaruby"
+    vip: "192.168.1.20"  # The VIP used by Kube-VIP
+  tasks:
+    - name: Install K3s on worker nodes
+      shell: |
+        curl -sfL https://get.k3s.io | K3S_URL=https://{{ vip }}:6443 K3S_TOKEN={{ k3s_token }} INSTALL_K3S_VERSION={{ k3s_version }} sh -
