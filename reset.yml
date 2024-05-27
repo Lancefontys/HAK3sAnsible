@@ -1,0 +1,59 @@
+---
+- name: Complete Reset of a Machine
+  hosts: all
+  become: true
+  tasks:
+    - name: Update and upgrade the system
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Remove all packages (except essential packages)
+      apt:
+        name: '*'
+        state: absent
+        purge: yes
+      ignore_errors: yes
+
+    - name: Clean up leftover files and caches
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items:
+        - /var/cache/apt
+        - /var/lib/apt
+        - /var/log
+        - /tmp/*
+        - /var/tmp/*
+      ignore_errors: yes
+
+    - name: Remove all user home directories
+      file:
+        path: /home/{{ item }}
+        state: absent
+      with_items:
+        - "{{ lookup('fileglob', '/home/*', wantlist=True) }}"
+      ignore_errors: yes
+
+    - name: Create a new home directory for root
+      file:
+        path: /root
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+
+    - name: Remove custom configuration files
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items:
+        - /etc/ssh/sshd_config
+        - /etc/fstab
+        - /etc/network/interfaces
+      ignore_errors: yes
+
+    - name: Reboot the machine
+      reboot:
+        msg: "Reboot initiated by Ansible for machine reset"
+        reboot_timeout: 600
