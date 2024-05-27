@@ -1,0 +1,164 @@
+- name: Create a highly available K3s cluster with Kube-VIP, Keepalived, and HAProxy
+  hosts: masters
+  become: yes
+  vars:
+    k3s_version: "v1.22.7+k3s1"
+    kube_vip_version: "0.8.0"
+    vip: "192.168.1.20"
+    vip_interface: "eth0"
+    haproxy_ip: "192.168.1.30"  # IP address of HAProxy node
+    metallb_address_range:
+      - "192.168.1.100-192.168.1.120"
+    k3s_token: "alphasapphireandomegaruby"
+    go_version: "1.21.0"
+
+  tasks:
+    - name: Ensure required packages are installed
+      package:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - curl
+        - tar
+        - make
+        - gcc
+        - golang
+        - keepalived
+        - haproxy
+
+    - name: Install specific Go version
+      shell: |
+        curl -OL https://golang.org/dl/go{{ go_version }}.linux-amd64.tar.gz
+        tar -C /usr/local -xzf go{{ go_version }}.linux-amd64.tar.gz
+        ln -sf /usr/local/go/bin/go /usr/local/bin/go
+      args:
+        creates: /usr/local/go
+
+    - name: Ensure Go is in the PATH
+      shell: |
+        echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+        . /etc/profile
+      args:
+        executable: /bin/bash
+
+    - name: Verify Go installation
+      command: go version
+
+    - name: Install K3s on first master node
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --cluster-init --tls-san {{ vip }}
+      when: inventory_hostname == groups['masters'][0]
+
+   - name: Ensure /var/lib/rancher/k3s/server/manifests directory exists
+      file:
+        path: /var/lib/rancher/k3s/server/manifests
+        state: directory
+        mode: '0755'
+
+    - name: Download Kube-VIP RBAC manifest
+      get_url:
+        url: https://kube-vip.io/manifests/rbac.yaml
+        dest: /var/lib/rancher/k3s/server/manifests/kube-vip-rbac.yaml
+
+    - name: Create Kube-VIP DaemonSet manifest
+      copy:
+        dest: /var/lib/rancher/k3s/server/manifests/kube-vip.yaml
+        content: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: kube-vip
+            namespace: kube-system
+            labels:
+              app: kube-vip
+          data:
+            vip.yaml: |
+              apiVersion: kube-vip.io/v1
+              kind: Config
+              metadata:
+                name: kubevip
+              spec:
+                interface: {{ vip_interface }}
+                vip: {{ vip }}
+                leaderElection:
+                  namespace: kube-system
+                services:
+                - name: kube-vip
+                  type: LoadBalancer
+                  ports:
+                    - port: 6443
+                      targetPort: 6443
+                      protocol: TCP
+          ---
+          apiVersion: apps/v1
+          kind: DaemonSet
+          metadata:
+            name: kube-vip
+            namespace: kube-system
+            labels:
+              app: kube-vip
+          spec:
+            selector:
+              matchLabels:
+                app: kube-vip
+            template:
+              metadata:
+                labels:
+                  app: kube-vip
+              spec:
+                containers:
+                - name: kube-vip
+                  image: plndr/kube-vip:{{ kube_vip_version }}
+                  args:
+                  - manager
+                  env:
+                  - name: vip_arp
+                    value: "true"
+                  - name: vip_leaderelection
+                    value: "true"
+                  - name: vip_interface
+                    value: "{{ vip_interface }}"
+                  - name: vip_cidr
+                    value: "32"
+                  - name: address
+                    value: "{{ vip }}"
+                  securityContext:
+                    capabilities:
+                      add:
+                      - NET_ADMIN
+                      - SYS_TIME
+                hostNetwork: true
+                tolerations:
+                - key: node-role.kubernetes.io/master
+                  operator: Exists
+                  effect: NoSchedule
+                nodeSelector:
+                  node-role.kubernetes.io/master: ""
+      when: inventory_hostname == groups['masters'][0]
+
+    - name: Edit kubeconfig file to use kube-vip VIP address
+      lineinfile:
+        path: /etc/rancher/k3s/k3s.yaml
+        regexp: '(server: )(.*)'
+        line: '\1https://{{ vip }}:6443'
+      when: inventory_hostname == groups['masters'][0]
+
+    - name: Setup Keepalived
+      template:
+        src: keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+
+    - name: Restart Keepalived
+      systemd:
+        name: keepalived
+        state: restarted
+
+    - name: Setup HAProxy
+      template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+
+    - name: Restart HAProxy
+      systemd:
+        name: haproxy
+        state: restarted
