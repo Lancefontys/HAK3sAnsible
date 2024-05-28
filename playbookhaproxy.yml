@@ -1,0 +1,82 @@
+- name: Create a highly available K3s cluster with Kube-VIP, Keepalived, and HAProxy
+  hosts: masters
+  become: yes
+  vars:
+    k3s_version: "v1.22.7+k3s1"
+    kube_vip_version: "0.8.0"
+    vip: "192.168.1.20"
+    vip_interface: "ens160"
+    haproxy_ip: "192.168.1.30"  # IP address of HAProxy node
+    metallb_address_range:
+      - "192.168.1.100-192.168.1.120"
+    k3s_token: "alphasapphireandomegaruby"
+    go_version: "1.21.0"
+
+  tasks:
+    - name: Ensure required packages are installed
+      package:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ packages }}"
+      vars:
+        packages: "{{ 'haproxy' if 'proxy' in group_names else 'curl tar make gcc keepalived golang' }}"        
+
+    - name: Install specific Go version
+      shell: |
+        curl -OL https://golang.org/dl/go{{ go_version }}.linux-amd64.tar.gz
+        tar -C /usr/local -xzf go{{ go_version }}.linux-amd64.tar.gz
+        ln -sf /usr/local/go/bin/go /usr/local/bin/go
+      args:
+        creates: /usr/local/go
+      when: "'masters' in group_names"        
+
+    - name: Ensure Go is in the PATH
+      shell: |
+        echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+        . /etc/profile
+      args:
+        executable: /bin/bash
+      when: "'masters' in group_names"
+      
+    - name: Verify Go installation
+      command: go version
+      when: "'masters' in group_names"
+      
+    - name: Install K3s on first master node
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --cluster-init --tls-san {{ vip }}
+      when: inventory_hostname == groups['masters'][0]
+
+    - name: Setup Keepalived
+      template:
+        src: keepalived.conf.j2
+        dest: /etc/keepalived/keepalived.conf
+      when: "'masters' in group_names"        
+
+    - name: Restart Keepalived
+      systemd:
+        name: keepalived
+        state: restarted
+      when: "'masters' in group_names"
+      
+    - name: Setup HAProxy
+      template:
+        src: haproxy.cfg.j2
+        dest: /etc/haproxy/haproxy.cfg
+      when: "'proxy' in group_names"
+      
+    - name: Restart HAProxy
+      systemd:
+        name: haproxy
+        state: restarted
+      when: "'proxy' in group_names"
+      
+    - name: Update kubeconfig file with VIP address (Only on First Master)
+      lineinfile:
+        path: /etc/rancher/k3s/k3s.yaml
+        regexp: '^(\s*server:).*'
+        line: '    server: https://{{ vip }}:6443'
+        insertafter: '^(\s*cluster:)$'
+      when:
+        - "'masters' in group_names"
+        - inventory_hostname == groups['masters'][0]
