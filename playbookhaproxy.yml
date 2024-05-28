@@ -18,9 +18,20 @@
       package:
         name: "{{ item }}"
         state: present
-      loop: "{{ packages }}"
-      vars:
-        packages: "{{ 'haproxy' if 'proxy' in group_names else 'curl tar make gcc keepalived golang' }}"        
+      loop:
+        - curl
+        - tar
+        - make
+        - gcc
+        - keepalived
+        - golang
+      when: "'masters' in group_names"
+
+    - name: Ensure required packages are installed on proxy node
+      package:
+        name: haproxy
+        state: present
+      when: "'proxy' in group_names"    
 
     - name: Install specific Go version
       shell: |
@@ -81,3 +92,8 @@
       when:
         - "'masters' in group_names"
         - inventory_hostname == groups['masters'][0]
+        
+    - name: Install K3s on additional master nodes
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --server https://{{ vip }}:6443 --tls-san {{ vip }}
+      when: inventory_hostname != groups['masters'][0]
