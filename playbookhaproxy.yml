@@ -1,5 +1,5 @@
 - name: Create a highly available K3s cluster with Kube-VIP, Keepalived, and HAProxy
-  hosts: masters
+  hosts: all
   become: yes
   vars:
     k3s_version: "v1.22.7+k3s1"
