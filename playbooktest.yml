@@ -49,7 +49,7 @@
         curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --cluster-init --tls-san {{ vip }}
       when: inventory_hostname == groups['masters'][0]
 
-   - name: Ensure /var/lib/rancher/k3s/server/manifests directory exists
+    - name: Ensure /var/lib/rancher/k3s/server/manifests directory exists
       file:
         path: /var/lib/rancher/k3s/server/manifests
         state: directory
@@ -143,12 +143,6 @@
         line: 'server: https://{{ vip }}:6443'
       notify: Restart K3s
       when: inventory_hostname == groups['masters'][0]
-
-  handlers:
-    - name: Restart K3s
-      systemd:
-        name: k3s
-        state: restarted
 
     - name: Setup Keepalived
       template:
