@@ -11,7 +11,8 @@
       - "192.168.1.100-192.168.1.120"
     k3s_token: "alphasapphireandomegaruby"
     go_version: "1.21.0"
-
+    keepalived_priority: "{{ 100 + groups['masters'].index(inventory_hostname) }}" # Adjust priorities dynamically
+    
   tasks:
     - name: Ensure required packages are installed
       package:
