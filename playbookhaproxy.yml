@@ -76,6 +76,13 @@
         src: haproxy.cfg.j2
         dest: /etc/haproxy/haproxy.cfg
       when: "'proxy' in group_names"
+
+    - name: Restart K3s service after configuring VIP
+      systemd:
+        name: k3s
+        state: restarted
+      become: yes
+      when: inventory_hostname == groups['masters'][0]
       
     - name: Restart HAProxy
       systemd:
