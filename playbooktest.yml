@@ -141,25 +141,12 @@
         path: /etc/rancher/k3s/k3s.yaml
         regexp: '(server: ).*'
         line: 'server: https://{{ vip }}:6443'
-      notify: Restart K3s
       when: inventory_hostname == groups['masters'][0]
 
-    - name: Setup Keepalived
-      template:
-        src: keepalived.conf.j2
-        dest: /etc/keepalived/keepalived.conf
-
-    - name: Restart Keepalived
-      systemd:
-        name: keepalived
-        state: restarted
-
-    - name: Setup HAProxy
-      template:
-        src: haproxy.cfg.j2
-        dest: /etc/haproxy/haproxy.cfg
-
-    - name: Restart HAProxy
-      systemd:
-        name: haproxy
-        state: restarted
+    - name: Wait for Kube-VIP pods to be ready
+      shell: "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl wait --for=condition=ready pod -l app=kube-vip -n kube-system --timeout=120s"
+      register: result
+      until: result.rc == 0
+      retries: 5
+      delay: 10
+      when: inventory_hostname == groups['masters'][0]
