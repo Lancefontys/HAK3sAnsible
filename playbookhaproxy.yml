@@ -59,6 +59,13 @@
         curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --cluster-init --tls-san {{ vip }}
       when: inventory_hostname == groups['masters'][0]
 
+    - name: Install K3s on additional master nodes
+      shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --server https://{{ groups['masters'][0] }}:6443 --tls-san {{ groups['masters'][0] }}
+      when:
+        - "'masters' in group_names"            
+        - inventory_hostname != groups['masters'][0]
+
     - name: Setup Keepalived
       template:
         src: keepalived.conf.j2
@@ -99,10 +106,3 @@
         state: restarted
       become: yes
       when: inventory_hostname == groups['masters'][0]
-        
-    - name: Install K3s on additional master nodes
-      shell: |
-        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --server https://{{ vip }}:6443 --tls-san {{ vip }}
-      when: 
-        - "'masters' in group_names"      
-        - inventory_hostname != groups['masters'][0]       
