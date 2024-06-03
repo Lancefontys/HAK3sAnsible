@@ -61,9 +61,18 @@
 
     - name: Install K3s on additional master nodes
       shell: |
-        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --server https://192.168.1.11:6443 --tls-san {{ groups['masters'][0] }}
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --server https://{{ vip }}:6443 --tls-san {{ vip }}
       when:
         - "'masters' in group_names"            
+        - inventory_hostname != groups['masters'][0]
+
+    - name: Ensure rancher directory exists on additional master nodes
+      file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: '0755'
+      when:
+        - "'masters' in group_names"
         - inventory_hostname != groups['masters'][0]
 
     - name: Setup Keepalived
