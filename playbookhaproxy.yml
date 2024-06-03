@@ -109,13 +109,16 @@
         - "'masters' in group_names"
         - inventory_hostname == groups['masters'][0]
 
-    - name: Ensure /etc/rancher/k3s/ directory exists on all masters
+    - name: Ensure /etc/rancher and /etc/rancher/k3s/ directories exist on all masters
       file:
-        path: /etc/rancher/k3s/
+        path: "{{ item }}"
         state: directory
         owner: root
         group: root
         mode: '0755'
+      with_items:
+        - /etc/rancher
+        - /etc/rancher/k3s
       when: "'masters' in group_names"
 
     - name: Copy kubeconfig from first master to other masters
@@ -124,7 +127,16 @@
         dest: /tmp/
         flat: yes
       delegate_to: "{{ groups['masters'][0] }}"
-      when: inventory_hostname != groups['masters'][0]      
+      when: inventory_hostname != groups['masters'][0]
+
+    - name: Copy kubeconfig to /etc/rancher/k3s/ on other masters
+      copy:
+        src: /tmp/k3s.yaml
+        dest: /etc/rancher/k3s/k3s.yaml
+        owner: root
+        group: root
+        mode: '0644'
+      when: inventory_hostname != groups['masters'][0]
 
     - name: Ensure .kube directory exists
       file:
@@ -140,14 +152,6 @@
         src: /etc/rancher/k3s/k3s.yaml
         dest: /home/{{ ansible_user }}/.kube/config
         remote_src: yes
-      when: "'masters' in group_names"
-
-    - name: Ensure correct permissions on kubeconfig file
-      file:
-        path: /home/{{ ansible_user }}/.kube/config
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
-        mode: '0644'
       when: "'masters' in group_names"
 
     - name: Restart K3s service after configuring VIP
