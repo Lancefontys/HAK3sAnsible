@@ -121,22 +121,24 @@
         - /etc/rancher/k3s
       when: "'masters' in group_names"
 
-    - name: Copy kubeconfig from first master to other masters
+    - name: Copy kubeconfig from first master to Ansible machine
       fetch:
         src: /etc/rancher/k3s/k3s.yaml
         dest: /tmp/
         flat: yes
       delegate_to: "{{ groups['masters'][0] }}"
-      when: inventory_hostname != groups['masters'][0]
+      when: inventory_hostname == groups['masters'][0]
 
-    - name: Copy kubeconfig to /etc/rancher/k3s/ on other masters
+    - name: Copy kubeconfig from Ansible machine to other masters
       copy:
         src: /tmp/k3s.yaml
         dest: /etc/rancher/k3s/k3s.yaml
         owner: root
         group: root
         mode: '0644'
-      when: inventory_hostname != groups['masters'][0]
+      when:
+        - "'masters' in group_names"
+        - inventory_hostname != groups['masters'][0]
 
     - name: Ensure .kube directory exists
       file:
@@ -147,16 +149,14 @@
         mode: '0755'
       when: "'masters' in group_names"
 
-    - name: Copy kubeconfig to user's home directory on all masters
-      copy:
-        src: /etc/rancher/k3s/k3s.yaml
-        dest: /home/{{ ansible_user }}/.kube/config
-        remote_src: yes
-      when: "'masters' in group_names"
-
     - name: Restart K3s service after configuring VIP
       systemd:
         name: k3s
         state: restarted
       become: yes
       when: inventory_hostname == groups['masters'][0]
+
+    - name: Join worker nodes to the cluster
+      shell: |
+        curl -sfL https://get.k3s.io | K3S_URL=https://{{ vip }}:6443 K3S_TOKEN={{ k3s_token }} sh -
+      when: "'workers' in group_names"
