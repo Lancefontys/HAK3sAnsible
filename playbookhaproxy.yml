@@ -158,5 +158,5 @@
 
     - name: Join worker nodes to the cluster
       shell: |
-        curl -sfL https://get.k3s.io | K3S_URL=https://{{ vip }}:6443 K3S_TOKEN={{ k3s_token }} sh -
+        curl -sfL https://get.k3s.io | K3S_URL=https://192.168.1.10:6443 K3S_TOKEN={{ k3s_token }} sh -
       when: "'workers' in group_names"
