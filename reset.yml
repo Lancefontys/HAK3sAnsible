@@ -1,59 +1,33 @@
 ---
-- name: Complete Reset of a Machine
-  hosts: all
+- name: Undo cluster setup
+  hosts: k3s_cluster
   become: true
   tasks:
-    - name: Update and upgrade the system
-      apt:
-        update_cache: yes
-        upgrade: dist
-
-    - name: Remove all packages (except essential packages)
-      apt:
-        name: '*'
+    - name: Run K3s Uninstall script [server]
+      when: "'server' in group_names"
+      ansible.builtin.command:
+        cmd: k3s-uninstall.sh
+        removes: /var/lib/rancher/k3s/*
+    - name: Run K3s Uninstall script [agent]
+      when: "'agent' in group_names"
+      ansible.builtin.command:
+        cmd: k3s-agent-uninstall.sh
+        removes: /var/lib/rancher/k3s/*
+    - name: Remove user kubeconfig
+      ansible.builtin.file:
+        path: ~{{ ansible_user }}/.kube/config
         state: absent
-        purge: yes
-      ignore_errors: yes
-
-    - name: Clean up leftover files and caches
-      file:
-        path: "{{ item }}"
+    - name: Remove k3s install script
+      ansible.builtin.file:
+        path: /usr/local/bin/k3s-install.sh
         state: absent
-      with_items:
-        - /var/cache/apt
-        - /var/lib/apt
-        - /var/log
-        - /tmp/*
-        - /var/tmp/*
-      ignore_errors: yes
-
-    - name: Remove all user home directories
-      file:
-        path: /home/{{ item }}
+    - name: Remove contents of K3s server location
+      when: k3s_server_location is defined
+      ansible.builtin.shell:
+        cmd: "rm -rf {{ k3s_server_location }}/*"
+        removes: "{{ k3s_server_location }}/*"
+    - name: Remove K3s config
+      when: server_config_yaml is defined
+      ansible.builtin.file:
+        path: /etc/rancher/k3s/config.yaml
         state: absent
-      with_items:
-        - "{{ lookup('fileglob', '/home/*', wantlist=True) }}"
-      ignore_errors: yes
-
-    - name: Create a new home directory for root
-      file:
-        path: /root
-        state: directory
-        mode: '0700'
-        owner: root
-        group: root
-
-    - name: Remove custom configuration files
-      file:
-        path: "{{ item }}"
-        state: absent
-      with_items:
-        - /etc/ssh/sshd_config
-        - /etc/fstab
-        - /etc/network/interfaces
-      ignore_errors: yes
-
-    - name: Reboot the machine
-      reboot:
-        msg: "Reboot initiated by Ansible for machine reset"
-        reboot_timeout: 600
