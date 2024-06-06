@@ -1,99 +1,31 @@
-- name: Create a highly available K3s cluster with Kube-VIP, Keepalived, and HAProxy
-  hosts: all
+---
+- hosts: master
   become: yes
   vars:
     k3s_version: "v1.30.0+k3s1"
-    kube_vip_version: "0.8.0"
-    vip: "192.168.1.20"
-    vip_interface: "ens160"
-    haproxy_ip: "192.168.1.30"  # IP address of HAProxy node
-    metallb_address_range:
-      - "192.168.1.100-192.168.1.120"
-    k3s_token: "alphasapphireandomegaruby"
-    go_version: "1.21.0"
-    keepalived_priority: "{{ 100 + groups['masters'].index(inventory_hostname) }}" # Adjust priorities dynamically
-    
   tasks:
-    - name: Ensure required packages are installed
-      package:
-        name: "{{ item }}"
-        state: present
-      loop:
-        - curl
-        - tar
-        - make
-        - gcc
-        - keepalived
-      when: "'masters' in group_names"
+    - name: Install K3s on master
+      shell: curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -
+      args:
+        creates: /usr/local/bin/k3s
 
-    - name: Ensure required packages are installed on proxy node
-      package:
-        name: haproxy
-        state: present
-      when: "'proxy' in group_names"    
-      
-    - name: Install K3s on first master node
-      shell: |
-        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_TOKEN={{ k3s_token }} sh -s - server --cluster-init --tls-san {{ vip }}
-      when: inventory_hostname == groups['masters'][0]
+    - name: Get K3s token
+      shell: cat /var/lib/rancher/k3s/server/node-token
+      register: k3s_token
 
+    - name: Get K3s server IP
+      command: hostname -I | awk '{print $1}'
+      register: master_ip
+      changed_when: false
 
-    - name: Install K3s on first master node
-      shell: |
-        curl -sfL https://get.k3s.io | K3S_URL=https://myserver:6443 K3S_TOKEN=mynodetoken sh -
-      when: inventory_hostname == groups['masters'][0]
-      
-    - name: Ensure rancher directory exists on additional master nodes
-      file:
-        path: /etc/rancher/k3s
-        state: directory
-        mode: '0755'
-      when:
-        - "'masters' in group_names"
-        - inventory_hostname != groups['masters'][0]
+    - name: Debug K3s token and IP
+      debug:
+        msg: "Token: {{ k3s_token.stdout }} Master IP: {{ master_ip.stdout }}"
 
-    - name: Setup Keepalived
-      template:
-        src: keepalived.conf.j2
-        dest: /etc/keepalived/keepalived.conf
-      when: "'masters' in group_names"        
-
-    - name: Restart Keepalived
-      systemd:
-        name: keepalived
-        state: restarted
-      when: "'masters' in group_names"
-      
-    - name: Setup HAProxy
-      template:
-        src: haproxy.cfg.j2
-        dest: /etc/haproxy/haproxy.cfg
-      when: "'proxy' in group_names"
-      
-    - name: Restart HAProxy
-      systemd:
-        name: haproxy
-        state: restarted
-      when: "'proxy' in group_names"
-      
-    - name: Update kubeconfig file with VIP address (Only on First Master)
-      lineinfile:
-        path: /etc/rancher/k3s/k3s.yaml
-        regexp: '^(\s*server:).*'
-        line: '    server: https://{{ vip }}:6443'
-        insertafter: '^(\s*cluster:)$'
-      when:
-        - "'masters' in group_names"
-        - inventory_hostname == groups['masters'][0]
-
-    - name: Restart K3s service after configuring VIP
-      systemd:
-        name: k3s
-        state: restarted
-      become: yes
-      when: inventory_hostname == groups['masters'][0]
-
-    - name: Join worker nodes to the cluster
-      shell: |
-        curl -sfL https://get.k3s.io | K3S_URL=https://192.168.1.10:6443 K3S_TOKEN={{ k3s_token }} sh -
-      when: "'workers' in group_names"
+- hosts: workers
+  become: yes
+  tasks:
+    - name: Install K3s agent
+      shell: curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_URL=https://{{ hostvars['master']['master_ip'].stdout }}:6443 K3S_TOKEN={{ hostvars['master']['k3s_token'].stdout }} sh -
+      args:
+        creates: /usr/local/bin/k3s-agent
