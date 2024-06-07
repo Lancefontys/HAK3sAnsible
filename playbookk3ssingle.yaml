@@ -3,6 +3,9 @@
   become: yes
   vars:
     k3s_version: "v1.30.0+k3s1"
+    metallb_version: "v0.13.10"
+    metallb_ip_range: "192.168.1.100-192.168.1.110"  # Adjust this range based on your network
+    
   tasks:
     - name: Install K3s on master
       shell: curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} sh -
@@ -13,19 +16,56 @@
       shell: cat /var/lib/rancher/k3s/server/node-token
       register: k3s_token
 
-    - name: Get K3s server IP
-      command: hostname -I | awk '{print $1}'
-      register: master_ip
-      changed_when: false
+    - name: get token for workers
+      set_fact: 
+          k3s_token: "{{ k3s_token.stdout }}"
 
-    - name: Debug K3s token and IP
-      debug:
-        msg: "Token: {{ k3s_token.stdout }} Master IP: {{ master_ip.stdout }}"
+### NEW ###
+
+    - name: Install Helm
+      shell: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+    - name: Add MetalLB Helm repo
+      shell: helm repo add metallb https://metallb.github.io/metallb
+
+    - name: Update Helm repos
+      shell: helm repo update      
+
+    - name: Install MetalLB
+      shell: |
+        kubectl create namespace metallb-system || true
+        helm install metallb metallb/metallb --namespace metallb-system --version {{ metallb_version }}
+      args:
+        creates: /usr/local/bin/metallb
+
+    - name: Configure MetalLB
+      copy:
+        dest: /tmp/metallb-config.yaml
+        content: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            namespace: metallb-system
+            name: config
+          data:
+            config: |
+              address-pools:
+              - name: default
+                protocol: layer2
+                addresses:
+                - {{ metallb_ip_range }}
+
+    - name: Apply MetalLB configuration
+      shell: kubectl apply -f /tmp/metallb-config.yaml
+
+### NEW ###
 
 - hosts: workers
   become: yes
+  vars:
+    k3s_version: "v1.30.0+k3s1"
   tasks:
     - name: Install K3s agent
-      shell: curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_URL=https://{{ hostvars['master']['master_ip'].stdout }}:6443 K3S_TOKEN={{ hostvars['master']['k3s_token'].stdout }} sh -
+      shell: curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_URL=https://{{ group['master'][0] }}:6443 K3S_TOKEN={{ hostvars[groups['k3s_token'][0]].k3s_token }} sh -
       args:
         creates: /usr/local/bin/k3s-agent
