@@ -68,6 +68,6 @@
     k3s_version: "v1.30.0+k3s1"
   tasks:
     - name: Install K3s agent
-      shell: curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_URL=https://{{ group['master'][0] }}:6443 K3S_TOKEN={{ hostvars[groups['k3s_token'][0]].k3s_token }} sh -
+      shell: curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION={{ k3s_version }} K3S_URL=https://{{ group['master'][0] }}:6443 K3S_TOKEN={{ hostvars[groups['master'][0]].k3s_token }} sh -
       args:
         creates: /usr/local/bin/k3s-agent
