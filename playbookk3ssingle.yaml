@@ -29,14 +29,15 @@
       shell: helm repo add metallb https://metallb.github.io/metallb
 
     - name: Update Helm repos
-      shell: helm repo update      
+      shell: helm repo update    
+
+    - name: Create MetalLB namespace
+      shell: kubectl create namespace metallb-system || true
 
     - name: Install MetalLB
-      shell: |
-        kubectl create namespace metallb-system || true
-        helm install metallb metallb/metallb --namespace metallb-system --version {{ metallb_version }}
-      args:
-        creates: /usr/local/bin/metallb
+      shell: helm install metallb metallb/metallb --namespace metallb-system --version {{ metallb_version }}
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
 
     - name: Configure MetalLB
       copy:
@@ -57,7 +58,8 @@
 
     - name: Apply MetalLB configuration
       shell: kubectl apply -f /tmp/metallb-config.yaml
-
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
 ### NEW ###
 
 - hosts: workers
