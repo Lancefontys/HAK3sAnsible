@@ -3,8 +3,9 @@
   become: yes
   vars:
     k3s_version: "v1.30.0+k3s1"
-    metallb_version: "v0.13.10"
+    metallb_version: "v0.14.5"
     metallb_ip_range: "192.168.1.100-192.168.1.110"  # Adjust this range based on your network
+    portainer_version: "2.19.5"
     
   tasks:
     - name: Install K3s on master
@@ -20,13 +21,14 @@
       set_fact: 
           k3s_token: "{{ k3s_token.stdout }}"
 
-### NEW ###
-
     - name: Install Helm
       shell: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
     - name: Add MetalLB Helm repo
       shell: helm repo add metallb https://metallb.github.io/metallb
+
+    - name: Add Portainer Helm repo
+      shell: helm repo add portainer https://portainer.github.io/k8s
 
     - name: Update Helm repos
       shell: helm repo update    
@@ -60,7 +62,48 @@
       shell: kubectl apply -f /tmp/metallb-config.yaml
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-### NEW ###
+
+    - name: Create Portainer namespace
+      shell: kubectl create namespace portainer || true
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Install Portainer
+      shell: helm install portainer portainer/portainer --namespace portainer --version {{ portainer_version }} --set service.type=LoadBalancer
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml        
+
+    - name: Create NGINX deployment
+      copy:
+        dest: /tmp/nginx-deployment.yaml
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: nginx-deployment
+            labels:
+              app: nginx
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: nginx
+            template:
+              metadata:
+                labels:
+                  app: nginx
+              spec:
+                containers:
+                - name: nginx
+                  image: nginx:latest
+                  ports:
+                  - containerPort: 80
+
+    - name: Apply NGINX deployment
+      shell: kubectl apply -f /tmp/nginx-deployment.yaml
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
 
 - hosts: workers
   become: yes
